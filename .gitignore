@@ -1,0 +1,33 @@
+# Python 환경
+.venv/
+venv/
+ENV/
+bin/
+lib/
+include/
+
+# Python 캐시 및 컴파일 파일
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# 환경 변수 및 보안
+.env
+.flaskenv
+
+# 데이터 및 로그 
+*.log
+data/*.csv
+data/*.parquet
+!data/sample.csv # 제외 파일
+
+# OS 및 IDE 설정
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# AI/DB 관련
+*.sqlite3
+db/
