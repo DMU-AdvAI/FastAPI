@@ -27,9 +27,9 @@ def init_db():
         adj_close REAL,         -- 수정 종가(액면분할, 배당 등을 반영한 종가)
         volume INTEGER,         -- 거래량
         change_rate REAL,       -- 등락률
-        ma5 REAL,               -- 5일 이동평균
-        ma20 REAL,              -- 20일 이동평균
-        rsi REAL,               -- 상대강도지수
+        nasdaq_close REAL,          -- 나스닥 종가
+        nasdaq_change_rate REAL,    -- 나스닥 등락률
+        market_diff REAL,           -- 시장 대비 초과수익률 (Rm - Rs)
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(ticker, date) -- 동일 종목, 동일 날짜 데이터 중복 방지
     );
