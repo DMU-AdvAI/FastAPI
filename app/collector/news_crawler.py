@@ -24,7 +24,7 @@ from typing import List
 
 # LLM 기반 헤드라인 전처리 함수
 # (단건 호출이 아닌 배치 호출로 API 비용/시간 절감)
-from headline_preprocessor import preprocess_headlines_batch
+from app.collector.headline_preprocessor import preprocess_headlines_batch
 
 
 # -------------------------------------------------
@@ -133,8 +133,11 @@ def fetch_news_by_ticker(ticker: str, news_type: str) -> pd.DataFrame:
             content = item.get("content", {})
 
             headline = content.get("title", "")
+
+            #소문자 비교
             headline_lower = headline.lower()
 
+            #company_name과 ticker가 없으면 continue
             if (company_name.lower() not in headline_lower) and (ticker.lower() not in headline_lower):
                 continue
             
