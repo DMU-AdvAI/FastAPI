@@ -169,6 +169,7 @@ def preprocess_headlines_batch(headlines: List[str]) -> List[str]:
 3. 요약하거나 새로운 해석을 추가하지 말 것
 4. 각각 한 문장으로 유지할 것
 5. 감정 판단(긍정/부정/중립)을 직접 언급하지 말 것
+6. 감정 단서를 제거하지 말고 유지하라
 
 출력 형식 (반드시 준수):
 - 번호. 정제된 헤드라인
@@ -246,7 +247,7 @@ if __name__ == "__main__":
 
     print("=== 배치 전처리 테스트 ===\n")
     results = preprocess_headlines_batch(test_headlines)
-
+    
     for before, after in zip(test_headlines, results):
         print(f"원본    : {before}")
         print(f"전처리  : {after}")
