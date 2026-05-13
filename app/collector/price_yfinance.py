@@ -25,16 +25,63 @@ from app.database.sqlite_db import save_price_to_db
 # (Yahoo Finance 티커 기준)
 # -------------------------------------------------
 BLUE_CHIP_STOCKS = [
-    "AAPL",   # Apple
-    "MSFT",   # Microsoft
-    "AMZN",   # Amazon
-    "GOOGL",  # Alphabet (Google)
-    "META",   # Meta Platforms
-    "TSLA",   # Tesla
-    "NVDA",   # NVIDIA
-    "BRK-B",  # Berkshire Hathaway (B주)
-    "V",      # Visa
-    "UNH",    # UnitedHealth Group
+
+    # Big Tech
+    "AAPL",    # Apple
+    "MSFT",    # Microsoft
+    "AMZN",    # Amazon
+    "GOOGL",   # Alphabet
+    "META",    # Meta
+    "NVDA",    # NVIDIA
+    "TSLA",    # Tesla
+
+    # Semiconductor
+    "AMD",     # AMD
+    "AVGO",    # Broadcom
+    "QCOM",    # Qualcomm
+    "INTC",    # Intel
+    "MU",      # Micron
+
+    # Finance
+    "JPM",     # JPMorgan
+    "BAC",     # Bank of America
+    "GS",      # Goldman Sachs
+    "MS",      # Morgan Stanley
+    "V",       # Visa
+    "MA",      # Mastercard
+
+    # Healthcare
+    "UNH",     # UnitedHealth
+    "JNJ",     # Johnson & Johnson
+    "PFE",     # Pfizer
+    "LLY",     # Eli Lilly
+    "MRK",     # Merck
+
+    # Consumer
+    "WMT",     # Walmart
+    "COST",    # Costco
+    "KO",      # Coca-Cola
+    "PEP",     # Pepsi
+    "MCD",     # McDonald's
+    "NKE",     # Nike
+
+    # Industrial
+    "CAT",     # Caterpillar
+    "GE",      # General Electric
+    "HON",     # Honeywell
+    "BA",      # Boeing
+
+    # Energy
+    "XOM",     # Exxon Mobil
+    "CVX",     # Chevron
+
+    # Communication / Entertainment
+    "NFLX",    # Netflix
+    "DIS",     # Disney
+
+    # ETFs
+    "SPY",     # S&P500 ETF
+    "QQQ",     # Nasdaq ETF
 ]
 
 def get_nasdaq_data(period: str = "2y") ->  Optional[pd.DataFrame]:
@@ -164,7 +211,7 @@ def fetch_price_data(
 
 def fetch_all_stocks_price_data(
     tickers: List[str] = BLUE_CHIP_STOCKS,
-    period: str = "2y"
+    period: str = "3y"
 ) -> pd.DataFrame:
     """
     여러 종목의 주가 데이터를 일괄 수집하여 하나의 DataFrame으로 결합한다.
