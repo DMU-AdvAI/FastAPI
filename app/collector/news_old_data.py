@@ -38,7 +38,6 @@ def align_news_time(df):
         
         target_date = pub_time.date()
         
-        # [지호님 요청] 22시 이후이면서 내일 예측 세션이면 날짜를 하루 더함
         if session == "PREDICT_TOMORROW" and pub_time.hour >= 22:
             target_date = target_date + timedelta(days=1)
             
