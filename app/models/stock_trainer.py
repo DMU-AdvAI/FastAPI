@@ -10,28 +10,28 @@ from sklearn.metrics import (
 # -----------------------------
 # 데이터 로드
 # -----------------------------
-df_tech = pd.read_csv("feature__indicator20260513.csv")
-df_news = pd.read_csv("news_sentiment_20260513.csv")
+df_tech = pd.read_csv("feature__indicator20260515.csv")
+# df_news = pd.read_csv("news_sentiment_20260513.csv")
 
-final_df = pd.merge(df_tech, df_news[['ticker', 'date', 'sentiment_score']], 
-                    on=['ticker', 'date'], how='left')
+# final_df = pd.merge(df_tech,[['ticker', 'date', 'sentiment_score']],on=['ticker', 'date'], how='left')
 
-final_df['sentiment_score'] = final_df['sentiment_score'].fillna(0)
+# final_df['sentiment_score'] = final_df['sentiment_score'].fillna(0)
 
 # 날짜 타입 변환
-final_df['date'] = pd.to_datetime(final_df['date'])
-final_df = final_df[abs(final_df['sentiment_score'] - 0.15) > 0.05]
+df_tech['date'] = pd.to_datetime(df_tech['date'])
+# final_df = final_df[abs(final_df['sentiment_score'] - 0.15) > 0.05]
 
 # -----------------------------
 # Feature 선택
 # -----------------------------
 feature_cols = [
-    'change_rate',
+    # 'change_rate',
     'return_5',
 
     'alpha',
     'alpha_5',
     'alpha_20',
+    'alpha_divergence',
 
     'ma_ratio',
 
@@ -42,7 +42,20 @@ feature_cols = [
 
     'nasdaq_change_rate',
 
-    'sentiment_score'
+    #심리도
+    # 'psychological',
+
+            #macd
+    'macd_hist',
+    
+    #최고가 대비 하락률
+    'drawdown_20',
+
+    'bb_percent',
+
+    # 5일간의 고가 - 저가 평균 (종목의 활동성)
+    'tr_5'
+
 ]
 
 target_col = 'label'
@@ -51,8 +64,8 @@ target_col = 'label'
 # Train / Test Split
 # 시계열이라 날짜 기준 분리
 # -----------------------------
-train = final_df[final_df['date'] < '2025-07-01']
-test = final_df[final_df['date'] >= '2025-07-01']
+train = df_tech[df_tech['date'] < '2025-07-01']
+test = df_tech[df_tech['date'] >= '2025-07-01']
 
 X_train = train[feature_cols]
 y_train = train[target_col]
@@ -71,16 +84,19 @@ model = LGBMClassifier(
     boosting_type='gbdt',
 
     n_estimators=300,
-    learning_rate=0.03,
+    learning_rate=0.01,
 
     max_depth=5,
     num_leaves=31,
-
+    min_data_in_leaf= 50,
+    feature_fraction= 0.8,
+    force_col_wise= True,
     subsample=0.8,
     colsample_bytree=0.8,
 
     random_state=42,
-    class_weight='balanced'
+    class_weight='balanced',
+    verbose= -1,
 )
 
 # -----------------------------

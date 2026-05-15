@@ -54,6 +54,20 @@ class FeatureProcessor:
         df['ma_ratio'] = df['ma5'] / df['ma20']
         df['price_ma20'] = df['adj_close'] / df['ma20']
 
+        df['disparity_20'] = (df['adj_close'] / df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(20).mean())) * 100
+        df['disparity_20'] = df['disparity_20'].fillna(100)
+
+        # MACD (이동평균 수렴 확산 지수) : 단기 이평선과 장기 이평선이 얼마나 빨리 멀어지는지(에너지)를 측정
+        short_ema = df.groupby('ticker')['adj_close'].transform(lambda x: x.ewm(span=12, adjust=False).mean())
+        long_ema = df.groupby('ticker')['adj_close'].transform(lambda x: x.ewm(span=26, adjust=False).mean())
+        df['macd'] = short_ema - long_ema
+        df['macd_signal'] = df.groupby('ticker')['macd'].transform(lambda x: x.ewm(span=9, adjust=False).mean())
+        df['macd_hist'] = df['macd'] - df['macd_signal'] # 이 히스토그램이 중요!
+
+        # 5일간의 고가 - 저가 평균 (종목의 활동성)
+        df['price_range'] = (df['high'] - df['low']) / df['adj_close']
+        df['tr_5'] = df.groupby('ticker')['price_range'].transform(lambda x: x.rolling(5).mean())
+
 
         # ---------------------------
         # RSI (Momentum)
@@ -79,6 +93,14 @@ class FeatureProcessor:
 
         #이격도
         # df['disparity_20'] = (df['adj_close'] - df['ma20']) / df['ma20']
+
+        # 볼린저 밴드 %B
+        std = df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(20).std())
+        ma20 = df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(20).mean())
+        df['upper_band'] = ma20 + (std * 2)
+        df['lower_band'] = ma20 - (std * 2)
+        # 현재가가 밴드 내 어디 위치하는지 (0~1 사이 값)
+        df['bb_percent'] = (df['adj_close'] - df['lower_band']) / (df['upper_band'] - df['lower_band'])
 
         # ---------------------------
         # 3. 수익률 (Return)
@@ -118,6 +140,14 @@ class FeatureProcessor:
                 df.groupby('ticker')['alpha']
                 .transform(lambda x: x.rolling(20).mean())
             )
+            df['alpha_divergence'] = df['alpha'] - df['alpha_5']
+            df['alpha_5'] = df['alpha_5'].fillna(0)
+            df['alpha_20'] = df['alpha_20'].fillna(0)
+            df['alpha_divergence'] = df['alpha_divergence'].fillna(0)
+
+        #심리도
+        df['is_up'] = (df['change_rate'] > 0).astype(int)
+        df['psychological'] = df.groupby('ticker')['is_up'].transform(lambda x: x.rolling(10).mean()) * 100
 
         # 미래 수익률
         df['target_1'] = (
@@ -130,8 +160,12 @@ class FeatureProcessor:
             .shift(-5) / df['adj_close'] - 1
         )
         # 분류 (노이즈 제거)
-        df['label'] = (df['target_5'] > 0.01).astype(int)
+        df['label'] = (df['target_5'] > 0.02).astype(int)
         print(df['label'].value_counts(normalize=True))
+
+        # 최고가 대비 하락률 (High Drawdown)
+        df['max_20'] = df.groupby('ticker')['high'].transform(lambda x: x.rolling(20).max())
+        df['drawdown_20'] = (df['adj_close'] - df['max_20']) / df['max_20']
         
         df = df.dropna().reset_index(drop=True)
 
@@ -141,11 +175,14 @@ class FeatureProcessor:
             'change_rate',
             'return_1',
             'return_5',
+            #이격도
+            'disparity_20',
 
             # 시장 상대 강도
             'alpha',
             'alpha_5',
             'alpha_20',
+            'alpha_divergence',
 
             # 이동평균
             'ma_ratio',
@@ -155,14 +192,28 @@ class FeatureProcessor:
             'rsi',
             'volatility_5',
 
+            #볼린저
+            'bb_percent',
+
+            #심리도
+            'psychological',
+
+            #macd
+            'macd_hist',
+
             # 거래량
             'volume_ratio',
+
+            #최고가 대비 하락률
+            'drawdown_20',
 
             # 시장
             'nasdaq_change_rate',
 
             # 타겟
-            'label'
+            'label',
+            # 5일간의 고가 - 저가 평균 (종목의 활동성)
+            'tr_5'
         ]
         df = df[meta_cols + feature_cols]
 
