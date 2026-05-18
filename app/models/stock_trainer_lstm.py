@@ -341,7 +341,7 @@ print("\nlstm_prediction_result.csv 저장 완료")
 # Top-K 평가
 # ---------------------------------------------------
 
-top_50 = result_df.head(50)
+top_50 = result_df.drop_duplicates(subset=['ticker']).head(50)
 top_100 = result_df.head(100)
 top_200 = result_df.head(200)
 
