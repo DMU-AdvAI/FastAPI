@@ -165,7 +165,7 @@ class FeatureProcessor:
 
         # 내일부터 3일 이내에 '종가 기준'으로 한 번이라도 2.5% 이상 상승하면 1, 아니면 0
         df['future_max_close_3d'] = df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(3, min_periods=1).max().shift(-3))
-        df['label'] = np.where((df['future_max_close_3d'] - df['adj_close']) / df['adj_close'] >= 0.025, 1, 0)
+        df['label'] = np.where((df['future_max_close_3d'] - df['adj_close']) / df['adj_close'] >= 0.02, 1, 0)
 
         # 최고가 대비 하락률 (High Drawdown)
         df['max_20'] = df.groupby('ticker')['high'].transform(lambda x: x.rolling(20).max())

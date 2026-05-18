@@ -181,7 +181,7 @@ test_dates_split = dates_all[test_idx]
 # ---------------------------------------------------
 # 시계열 순서를 보장하는 Val 분할
 # ---------------------------------------------------
-# 종목 셔플 분할 오류를 막기 위해, Train 데이터 내부에서 가장 최신 날짜 기준 20%를 Val로 잡습니다.
+# 종목 셔플 분할 오류를 막기 위해, Train 데이터 내부에서 가장 최신 날짜 기준 20%를 Val
 train_dates_only = dates_all[train_idx]
 split_time = np.percentile(train_dates_only, 80) # 하위 80% 시점 날짜 추출
 
@@ -203,7 +203,7 @@ print("X_test:", X_test.shape)
 
 model = Sequential([
     LSTM(
-        32,
+        64,
         input_shape=(SEQ_LEN, len(feature_cols)),
         return_sequences=False
     ),
@@ -286,7 +286,7 @@ history = model.fit(
 
 pred_prob = model.predict(X_test).flatten()
 
-threshold = 0.50
+threshold = 0.6
 
 pred = (pred_prob >= threshold).astype(int)
 
@@ -320,6 +320,7 @@ index=False
 )
 
 print("\nlstm_prediction_result.csv 저장 완료")
+print(len(X_all), len(y_all), len(tickers_all), len(dates_all))
 
 # ---------------------------------------------------
 # Top-K 평가
