@@ -11,7 +11,7 @@ m2 = lstm_res[['date', 'ticker', 'pred_prob']].rename(columns={'pred_prob': 'pro
 
 ensemble_df = pd.merge(m1, m2, on=['date', 'ticker'], how='inner')
 
-ensemble_df['final_prob'] = (ensemble_df['prob_lgb'] * 0.7) + (ensemble_df['prob_lstm'] * 0.3)
+ensemble_df['final_prob'] = (ensemble_df['prob_lgb'] * 0.3) + (ensemble_df['prob_lstm'] * 0.)
 
 
 # ---------------------------------------------------
@@ -22,7 +22,7 @@ print("\n===== Ensemble Daily Top-K Performance =====")
 ensemble_top3_actuals = []
 
 LGBM_THRESHOLD = 0.70
-LSTM_THRESHOLD = 0.45
+LSTM_THRESHOLD = 0.55
 
 # 날짜순으로 정렬 후 그룹화
 ensemble_df = ensemble_df.sort_values(['date', 'final_prob'], ascending=[True, False])

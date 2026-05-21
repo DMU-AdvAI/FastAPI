@@ -61,6 +61,8 @@ GBM_FEATURE_COLS = [
     # 시장
     # 'nasdaq_change_rate',        
     # 5일간의 고가 - 저가 평균 (종목의 활동성)
-    'tr_5'
+    'tr_5',
+    'pullback_zscore',
+    'price_position_52w'
     
 ]

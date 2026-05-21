@@ -25,18 +25,16 @@ from app.database.sqlite_db import save_price_to_db
 # (Yahoo Finance 티커 기준)
 # -------------------------------------------------
 BLUE_CHIP_STOCKS = [
-    "AAPL", "ABBV", "ABT", "ACN", "ADBE", "ADI", "ADM", "ADP", "ADSK", "AIG",
-    "ALL", "AMAT", "AMD", "AMGN", "AMZN", "ANET", "APA", "APD", "APH", "AVGO",
-    "AXP", "BA", "BAC", "BEN", "BK", "BKNG", "BLK", "BMY", "BRK-B", "BSX",
-    "C", "CAT", "CELG", "CHTR", "CL", "CMCSA", "COF", "COP", "COST", "CRM",
-    "CSCO", "CSX", "CTSH", "CVS", "CVX", "DE", "DHR", "DIS", "DOW", "DUK",
-    "EMR", "EXC", "F", "META", "FDX", "GD", "GE", "GILD", "GM", "GOOG",
-    "GOOGL", "GS", "HD", "HON", "IBM", "INTC", "INTU", "ISRG", "JNJ", "JPM",
-    "KMI", "KO", "LLY", "LMT", "LOW", "MA", "MCD", "MDT", "MET", "MMM",
-    "MO", "MRK", "MS", "MSFT", "NEE", "NFLX", "NKE", "NVDA", "ORCL", "PEP",
-    "PFE", "PG", "PM", "PYPL", "QCOM", "RTX", "SBUX", "SCHW", "SO", "SPG",
-    "T", "TGT", "TMO", "TMUS", "TSLA", "TXN", "UNH", "UNP", "UPS", "USB",
-    "V", "VZ", "WFC", "WMB", "WMT", "XOM"
+    "NVDA", "AMD", "AVGO", "MU", "QCOM", "INTC", "TXN", "AMAT", "LRCX", "KLAC",
+    
+    # 빅테크
+    "MSFT", "AMZN", "META", "GOOGL", "AAPL", "TSLA", "NFLX", "CRM", "ADBE", "NOW",
+    
+    # 클라우드/사이버
+    "PLTR", "SNOW", "CRWD", "PANW", "ZS", "OKTA", "NET", "DDOG", "MDB", "GTLB",
+    
+    # 핀테크/기타 성장
+    "COIN", "SQ", "SHOP", "MELI", "SPOT", "UBER", "ABNB", "DASH", "TTD", "RBLX"
 ]
 CORE_STOCKS = [
 
@@ -185,7 +183,7 @@ def fetch_price_data(
 
 
 def fetch_all_stocks_price_data(
-    tickers: List[str] = CORE_STOCKS,
+    tickers: List[str] = BLUE_CHIP_STOCKS,
     period: str = "3y"
 ) -> pd.DataFrame:
     """

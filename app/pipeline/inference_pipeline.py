@@ -20,31 +20,23 @@ from app.features.processor_lstm import FeatureProcessorLSTM
 # ---------------------------------------------------
 # 가드레일 & 타임프레임 스펙 고정
 # ---------------------------------------------------
-LGBM_THRESHOLD = 0.65
-LSTM_THRESHOLD = 0.45
+LGBM_THRESHOLD = 0.55
+LSTM_THRESHOLD = 0.50
 SEQ_LEN_20 = 20
 SEQ_LEN_60 = 60
 
 # 주먹 봇 핵심 관리 대장주 리스트
 TICKERS = [
-    "NVDA",
-    "AMD",
-    "AVGO",
-    "MU",
-    "QCOM",
-
-    "MSFT",
-    "AMZN",
-    "META",
-    "GOOGL",
-    "TSLA",
-
-    "NFLX",
-    "PLTR",
-    "SNOW",
-    "CRWD",
-    "PANW",
-    "^SOX"
+    "NVDA", "AMD", "AVGO", "MU", "QCOM", "INTC", "TXN", "AMAT", "LRCX", "KLAC",
+    
+    # 빅테크
+    "MSFT", "AMZN", "META", "GOOGL", "AAPL", "TSLA", "NFLX", "CRM", "ADBE", "NOW",
+    
+    # 클라우드/사이버
+    "PLTR", "SNOW", "CRWD", "PANW", "ZS", "OKTA", "NET", "DDOG", "MDB", "GTLB",
+    
+    # 핀테크/기타 성장
+    "COIN", "SQ", "SHOP", "MELI", "SPOT", "UBER", "ABNB", "DASH", "TTD", "RBLX"
 ]
 
 print("독립 듀얼 파이프라인 실전 추론 테스트")
@@ -120,6 +112,9 @@ for ticker in TICKERS:
     seq_60 = ticker_lstm_ordered.iloc[-SEQ_LEN_60:].values
     
     ticker_scaler = scalers[ticker] 
+    if ticker not in scalers:
+        print(f"[경고] {ticker} 스케일러 없음, 스킵")
+        continue
     
     seq_20_scaled = ticker_scaler.transform(pd.DataFrame(seq_20, columns=lstm_cols))
     seq_60_scaled = ticker_scaler.transform(pd.DataFrame(seq_60, columns=lstm_cols))
@@ -144,7 +139,7 @@ for ticker in TICKERS:
     # -----------------------------------------------
     # 앙상블 가중치 결합 및 데이터 적재 (7:3)
     # -----------------------------------------------
-    final_prob = (prob_lgb * 0.7) + (prob_lstm * 0.3)
+    final_prob = 2 * (prob_lgb * prob_lstm) / (prob_lgb + prob_lstm + 1e-9)
     
     results.append({
         'ticker': ticker,
@@ -159,6 +154,11 @@ inference_df = pd.DataFrame(results, columns=['ticker', 'prob_lgb', 'prob_lstm',
 # ===================================================
 # 교집합 AND 가드레일 필터링 알고리즘 가동
 # ===================================================
+ticker_gbm = df_features_gbm[df_features_gbm['ticker'] == 'NVDA'].sort_values('date')
+lgb_input = ticker_gbm[GBM_FEATURE_COLS].iloc[[-1]]
+
+print("=== NVDA 추론 입력값 ===")
+print(lgb_input.T.to_string())
 
 inference_df['signal'] = (inference_df['prob_lgb'] >= LGBM_THRESHOLD) & (inference_df['prob_lstm'] >= LSTM_THRESHOLD)
 

@@ -146,37 +146,21 @@ print(np.mean(daily_scores))
 # -----------------------------
 # 전체 기준 Top-K
 # -----------------------------
-top_50 =(
-    result_df
-    .sort_values('rank_score',ascending=False)
-    .drop_duplicates(subset=["ticker"])
-    .head(50)
-) 
-    
-
-top_100 =(
-    result_df
-    .sort_values('rank_score',ascending=False)
-    .drop_duplicates(subset=["ticker"])
-    .head(100)
-) 
-
-top_200 =(
-    result_df
-    .sort_values('rank_score',ascending=False)
-    .drop_duplicates(subset=["ticker"])
-    .head(200)
-) 
-
 print("\n===== Top-K Performance =====")
+for k in [3, 5, 10]:
+    daily_actuals = []
+    
+    for date, group in result_df.groupby('date'):
+        top_k = group.sort_values('rank_score', ascending=False).head(k)
+        daily_actuals.extend(top_k['actual'].tolist())
+    
+    hit_rate = np.mean(daily_actuals)
+    print(f"날짜별 Top{k} 평균 타율: {hit_rate:.4f}  "
+          f"(베이스라인 대비 {hit_rate/result_df['actual'].mean():.2f}배)")
 
-print(f"Top 50 상승 비율  : {top_50['actual'].mean():.4f}")
-print(top_50[['ticker', 'date', 'actual', 'pred_prob', 'rank_score']])
+print(f"베이스라인: {result_df['actual'].mean():.4f}")
 
-print(f"Top 100 상승 비율 : {top_100['actual'].mean():.4f}")
-print(f"Top 200 상승 비율 : {top_200['actual'].mean():.4f}")
 
-print(f"\n전체 상승 비율 : {result_df['actual'].mean():.4f}")
 
 result_df.to_csv("prediction_result.csv", index=False)
 
