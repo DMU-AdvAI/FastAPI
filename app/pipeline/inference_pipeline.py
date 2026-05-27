@@ -43,7 +43,7 @@ print("✅ LightGBM & Multi-Input LSTM 가중치 로드 완료.")
 # ===================================================
 print("야후 파이낸스 최신 마켓 데이터 및 나스닥 등락율 결합")
 
-df_raw = fetch_all_stocks_price_data(tickers=tickers, period="1y")
+df_raw = fetch_all_stocks_price_data(tickers=tickers, period="2y")
 
 if df_raw.empty:
     print("[에러] 최신 마켓 데이터 수집에 실패")
@@ -144,10 +144,14 @@ inference_df = pd.DataFrame(results, columns=['ticker', 'prob_lgb', 'prob_lstm',
 # 교집합 AND 가드레일 필터링 알고리즘 가동
 # ===================================================
 ticker_gbm = df_features_gbm[df_features_gbm['ticker'] == 'NVDA'].sort_values('date')
+ticker_lstm = df_features_lstm[df_features_lstm['ticker'] == 'NVDA'].sort_values('date')
 lgb_input = ticker_gbm[GBM_FEATURE_COLS].iloc[[-1]]
+lstm_input = ticker_lstm[LSTM_FEATURE_COLS].iloc[[-1]]
 
-print("=== NVDA 추론 입력값 ===")
+print("=== NVDA 추론 입력값 gbm ===")
 print(lgb_input.T.to_string())
+print("=== NVDA 추론 입력값 lstm ===")
+print(lstm_input.T.to_string())
 
 inference_df['signal'] = (inference_df['prob_lgb'] >= LGBM_THRESHOLD) & (inference_df['prob_lstm'] >= LSTM_THRESHOLD)
 

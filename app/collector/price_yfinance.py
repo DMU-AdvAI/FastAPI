@@ -221,8 +221,8 @@ def fetch_all_stocks_price_data(
 ) -> pd.DataFrame:
 
     data_frames = []
-    nasdaq_df=get_nasdaq_data()
-    regime_df = get_market_regime_data()
+    nasdaq_df=get_nasdaq_data(period=period)
+    regime_df = get_market_regime_data(period=period)
 
     for ticker in tickers:
         print(f"[수집 중] {ticker} ...")
