@@ -1,41 +1,14 @@
-# TODO:
-# 1. 데이터 정제 (Data Cleaning)
-#    - yfinance에서 가져온 데이터 중 비어있는 값(NaN) 처리
-#    - 주식 분할이나 배당 등이 반영된 수정 종가(Adj Close) 사용 여부 결정
-#
-# 2. 기술적 지표 생성 (Technical Indicators)
-#    - 이동평균선(SMA/EMA): 5일, 20일, 60일선 등 계산
-#    - 변동성 지표: 볼린저 밴드(Bollinger Bands), ATR 등
-#    - 모멘텀 지표: RSI, MACD, Stochastic 등
-#
-# 3. 모델 입력용 데이터셋 구성 (Feature Matrix)
-#    - XGBoost 모델이 학습할 때 사용했던 컬럼 순서와 동일하게 정렬
-#    - 예측 시점(t)을 기준으로 과거 n일간의 데이터를 한 줄로 펼치기(Lag features)
-#
-# 4. 정규화 및 스케일링 (Optional)
-#    - 데이터의 범위를 0~1 사이로 맞추는 등의 스케일링 작업 (필요 시)
-#
-# 5. 최종 데이터 유효성 검사
-#    - 모델에 넣기 직전 데이터에 이상치나 무한대(Inf) 값이 없는지 확인
-
 import pandas as pd
 import numpy as np
-from app.database.sqlite_db import get_connection
 from datetime import datetime
+from app.config.config import GBM_FEATURE_COLS
+from app.features.base_processor import BaseFeatureProcessor
 
-class FeatureProcessor:
-    def __init__(self, db_path: str = "stock_data.db"):
-        self.db_path = db_path
 
-    def get_raw_data(self)->pd.DataFrame:
-        conn = get_connection()
-        query = f"SELECT * FROM stock_prices ORDER BY date ASC"
-        df = pd.read_sql(query,conn)
-        conn.close()
+class FeatureProcessorGBM(BaseFeatureProcessor):
+    pass
 
-        return df
-        
-    def calc_technical_indicators(self, df, rsi_period=14):
+    def calc_technical_indicators(self, df, rsi_period=14,is_inference=False):
         df = df.sort_values(['ticker','date']).reset_index(drop=True)
 
         # ---------------------------
@@ -54,8 +27,8 @@ class FeatureProcessor:
         df['ma_ratio'] = df['ma5'] / df['ma20']
         df['price_ma20'] = df['adj_close'] / df['ma20']
 
-        df['disparity_20'] = (df['adj_close'] / df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(20).mean())) * 100
-        df['disparity_20'] = df['disparity_20'].fillna(100)
+        # df['disparity_20'] = (df['adj_close'] / df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(20).mean())) * 100
+        # df['disparity_20'] = df['disparity_20'].fillna(100)
 
         # MACD (이동평균 수렴 확산 지수) : 단기 이평선과 장기 이평선이 얼마나 빨리 멀어지는지(에너지)를 측정
         short_ema = df.groupby('ticker')['adj_close'].transform(lambda x: x.ewm(span=12, adjust=False).mean())
@@ -67,32 +40,35 @@ class FeatureProcessor:
         # 5일간의 고가 - 저가 평균 (종목의 활동성)
         df['price_range'] = (df['high'] - df['low']) / df['adj_close']
         df['tr_5'] = df.groupby('ticker')['price_range'].transform(lambda x: x.rolling(5).mean())
-
+        df['tr_20'] = df.groupby('ticker')['price_range'].transform(lambda x: x.rolling(20).mean())
+        df['tr_60'] = df.groupby('ticker')['price_range'].transform(lambda x: x.rolling(60).mean())
 
         # ---------------------------
         # RSI (Momentum)
         # ---------------------------
         delta = df.groupby('ticker')['adj_close'].diff()
+        
         # 상승, 하락분 분리
         gain = delta.clip(lower=0)
         loss = -delta.clip(upper=0)
 
+        # 지수이동평균(.ewm)을 사용하여 와일더 평활화 구현
         avg_gain = (
             gain.groupby(df['ticker'])
-            .transform(lambda x : x.rolling(rsi_period).mean())
-        )
-        
-        avg_loss = (
-            loss.groupby(df['ticker'])
-            .transform(lambda x : x.rolling(rsi_period).mean())
+            .transform(lambda x: x.ewm(com=rsi_period - 1, adjust=False).mean())
         )
 
-        # RS(상대강도) 및 RSI 계산
+        avg_loss = (
+            loss.groupby(df['ticker'])
+            .transform(lambda x: x.ewm(com=rsi_period - 1, adjust=False).mean())
+        )
+
+        # RS 및 RSI 계산
         rs = avg_gain / (avg_loss + 1e-9)
         df['rsi'] = 100 - (100 / (1 + rs))
 
         #이격도
-        # df['disparity_20'] = (df['adj_close'] - df['ma20']) / df['ma20']
+        df['disparity_20'] = (df['adj_close'] - df['ma20']) / df['ma20']
 
         # 볼린저 밴드 %B
         std = df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(20).std())
@@ -101,6 +77,8 @@ class FeatureProcessor:
         df['lower_band'] = ma20 - (std * 2)
         # 현재가가 밴드 내 어디 위치하는지 (0~1 사이 값)
         df['bb_percent'] = (df['adj_close'] - df['lower_band']) / (df['upper_band'] - df['lower_band'])
+
+        df['disparity_zscore'] = (df['adj_close'] - ma20) / (std + 1e-9)
 
         # ---------------------------
         # 3. 수익률 (Return)
@@ -127,6 +105,7 @@ class FeatureProcessor:
                 .transform(lambda x: x.rolling(5).mean())
             )
             df['volume_ratio'] = df['volume'] / (df['volume_ma5'] + 1e-9)
+            
 
         # ---------------------------
         # 시장 대비 (Alpha)
@@ -149,94 +128,104 @@ class FeatureProcessor:
         df['is_up'] = (df['change_rate'] > 0).astype(int)
         df['psychological'] = df.groupby('ticker')['is_up'].transform(lambda x: x.rolling(10).mean()) * 100
 
-        # 미래 수익률
-        df['target_1'] = (
-            df.groupby('ticker')['adj_close']
-            .shift(-1) / df['adj_close'] - 1
-        )
-
-        df['target_5'] = (
-            df.groupby('ticker')['adj_close']
-            .shift(-5) / df['adj_close'] - 1
-        )
-        # 분류 (노이즈 제거)
-        # df['label'] = (df['target_5'] > 0.03).astype(int)
-        # print(df['label'].value_counts(normalize=True))
-
-        # 내일부터 3일 이내에 '종가 기준'으로 한 번이라도 2.5% 이상 상승하면 1, 아니면 0
-        df['future_max_close_3d'] = df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(3, min_periods=1).max().shift(-3))
-        df['label'] = np.where((df['future_max_close_3d'] - df['adj_close']) / df['adj_close'] >= 0.025, 1, 0)
-
         # 최고가 대비 하락률 (High Drawdown)
         df['max_20'] = df.groupby('ticker')['high'].transform(lambda x: x.rolling(20).max())
         df['drawdown_20'] = (df['adj_close'] - df['max_20']) / df['max_20']
+
+        # 현재가가 20일 밴드 어디쯤인지 (이미 bb_percent 있으므로 60일 버전 추가)
+        std_60 = df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(60).std())
+        ma_60  = df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(60).mean())
+        df['bb_percent_60'] = (df['adj_close'] - (ma_60 - 2*std_60)) / (4*std_60 + 1e-9)
+
         
-        check_cols = ['disparity_20', 'alpha_20', 'drawdown_20', 'future_max_close_3d']
-        df = df.dropna(subset=check_cols).reset_index(drop=True)
+        df['high_20'] = df.groupby('ticker')['high'].transform(lambda x: x.rolling(20).max())
 
+        # 5일 후 수익률
+        df['forward_5d'] = (
+            df.groupby('ticker')['adj_close'].shift(-5) / df['adj_close'] - 1
+        )
+        
+        # 나스닥 5일 누적 수익률
+        df['nasdaq_forward_5d'] = df.groupby('ticker')['nasdaq_change_rate'].transform(
+            lambda x: (1 + x).rolling(5).apply(np.prod, raw=True) - 1
+        ).shift(-5)  # 미래 5일
+        
+        # 초과수익 = 종목 수익률 - 나스닥 수익률
+        df['excess_5d'] = df['forward_5d'] - df['nasdaq_forward_5d']
+        
+        # 눌림목 z-score (종목 자체 기준)
+        df['pullback'] = (df['adj_close'] / df['high_20']) - 1
+        df['pullback_zscore'] = (
+            df['pullback'] - df.groupby('ticker')['pullback']
+            .transform(lambda x: x.rolling(60).mean())
+        ) / (df.groupby('ticker')['pullback']
+            .transform(lambda x: x.rolling(60).std()) + 1e-9)
+        
+        df['price_position_52w'] = (
+        (df['adj_close'] - df.groupby('ticker')['adj_close'].transform(
+            lambda x: x.rolling(252).min())) /
+        (df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(252).max()) -
+        df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(252).min()) + 1e-9)
+        )
+        # vix/tnx 파생 피처
+        df['vix_regime'] = pd.cut(
+            df['vix'],
+            bins=[0, 15, 20, 25, 30, 999],
+            labels=[0, 1, 2, 3, 4]
+        ).astype(float)
+
+        df['tnx_change_5']  = df['tnx'].pct_change(5)   # 5일 변화율
+        df['tnx_change_20'] = df['tnx'].pct_change(20)
+
+        if not is_inference:
+            # 장중 저가 기준 SL + 종가 기준 TP (base_processor.make_label 사용)
+            df = self._apply_labels(df)
+        else:
+            # 라벨이 없으므로 -1로 초기화
+            df['label'] = -1
+            # 필요한 컬럼만 체크
+            check_cols_inf = ['disparity_20', 'alpha_20', 'drawdown_20', 'rsi', 'macd_hist','pullback_zscore']
+            # 결측치 제거
+            df = df.dropna(subset=check_cols_inf).reset_index(drop=True)
+
+        
         meta_cols = ['ticker', 'date']
-        feature_cols = [
-            # 모멘텀
-            'change_rate',
-            'return_1',
-            'return_5',
-            #이격도
-            'disparity_20',
-
-            # 시장 상대 강도
-            'alpha',
-            'alpha_5',
-            'alpha_20',
-            'alpha_divergence',
-
-            # 이동평균
-            'ma_ratio',
-            'price_ma20',
-
-            # RSI / 변동성
-            'rsi',
-            'volatility_5',
-
-            #볼린저
-            'bb_percent',
-
-            #심리도
-            'psychological',
-
-            #macd
-            'macd_hist',
-
-            # 거래량
-            'volume_ratio',
-
-            #최고가 대비 하락률
-            'drawdown_20',
-
-            # 시장
-            'nasdaq_change_rate',
-
-            # 타겟
-            'label',
-            # 5일간의 고가 - 저가 평균 (종목의 활동성)
-            'tr_5'
-        ]
-        df = df[meta_cols + feature_cols]
+        feature_cols = GBM_FEATURE_COLS
+        if not is_inference:
+            df = df[meta_cols + feature_cols + ['label']]
+        else:
+            df = df[meta_cols + feature_cols]
 
         print(df.columns)
 
         return df
-    
+
 if __name__ == "__main__":
-    processor = FeatureProcessor()
+    processor = FeatureProcessorGBM()
     df = processor.get_raw_data()
     df = processor.calc_technical_indicators(df)
 
     today = datetime.now().strftime("%Y%m%d")
     df.to_csv(
-        f"feature__indicator{today}.csv",
+        f"feature__indicator_{today}.csv",
         index=False,
         encoding="utf-8-sig"
     )
+    print("양성 비율:", df['label'].mean())
+    print("양성 개수:", df['label'].sum())
+    print("음성 개수:", (df['label'] == 0).sum())
+    # 학습에 쓴 피처들의 분포
+    print(df[GBM_FEATURE_COLS].describe())
+
+    # 추론 시점 데이터 분포
+    print(df[GBM_FEATURE_COLS].tail(20).describe())
+    print(df[['pullback_zscore']].tail(5))
+    print(df['pullback_zscore'].isna().sum())
+    print([c for c in GBM_FEATURE_COLS if 'excess' in c or 'forward' in c])
+    print("시작일:", df['date'].min())
+    print("종료일:", df['date'].max())
+    print("총 행수:", len(df))
+
     print(df.shape)
     print(
     df[['ticker', 'date']].duplicated().sum()

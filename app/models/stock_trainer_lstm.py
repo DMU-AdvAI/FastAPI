@@ -1,340 +1,318 @@
 import pandas as pd
 import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import TensorDataset, DataLoader
+import joblib
+import random
 
+random.seed(42)
+np.random.seed(42)
+torch.manual_seed(42)
+
+from app.config.config import LSTM_FEATURE_COLS
+from app.models.lstm_model import DualLSTMModel
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (
     classification_report,
     accuracy_score,
-    roc_auc_score
+    roc_auc_score,
 )
-from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import (
-    LSTM,
-    Dense,
-    Dropout
-)
-from tensorflow.keras.callbacks import EarlyStopping
+# ---------------------------------------------------
+# GPU 확인
+# ---------------------------------------------------
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"[Device] {device}")
+if device.type == 'cuda':
+    torch.cuda.manual_seed_all(42)
+    print(f"  GPU  : {torch.cuda.get_device_name(0)}")
+    print(f"  VRAM : {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+
+use_amp = device.type == 'cuda'
+scaler_amp = torch.amp.GradScaler('cuda', enabled=use_amp)
 
 # ---------------------------------------------------
-
-# 데이터 로드
-
+# Data load
 # ---------------------------------------------------
-
-# df = pd.read_csv("feature__indicator20260518.csv")
-df = pd.read_csv("feature__indicator_lstm20260518.csv")
-
+df = pd.read_csv("feature__indicator_lstm20260528.csv")
 df['date'] = pd.to_datetime(df['date'])
 
-# ---------------------------------------------------
-
-# Feature 선택
-
-# ---------------------------------------------------
-
-# feature_cols = [
-#     'alpha',
-#     'alpha_5',
-#     'alpha_20',
-#     'alpha_divergence',
-
-#     'ma_ratio',
-
-#     'rsi',
-
-#     'volatility_5',
-
-#     'volume_ratio',
-
-#     'nasdaq_change_rate',
-
-#     'macd_hist',
-
-#     'drawdown_20',
-
-#     'bb_percent',
-
-#     'tr_5'
-
-# ]
-# feature_cols = [
-
-#         # raw
-#         'open',
-#         'high',
-#         'low',
-#         'adj_close',
-#         'volume',
-
-#         # returns
-#         'change_rate',
-#         'log_return',
-
-#         # candle
-#         'candle_body',
-#         'high_low_spread',
-
-#         # indicator
-#         'rsi',
-#         'macd_hist',
-#         'bb_percent',
-#         'volatility_5',
-
-#         # market
-#         'nasdaq_change_rate'
-#         ]
-feature_cols = [
-            # 1. 가격의 변화율 및 캔들 모양 (이미 0을 기준으로 정규화된 형태)
-            'change_rate',
-            'log_return',
-            'candle_body',
-            'high_low_spread',
-            
-            # 2. 거래량 지표 (Raw volume은 절대 금지, 비율로 치환된 것만 사용)
-            'volume_ratio',
-            'volume_change',
-            
-            # 3. 보조지표 (0~1 사이 혹은 스케일이 안정적인 녀석들)
-            'bb_percent',     # 0~1 사이 값이라 LSTM이 환장하고 좋아함
-            'volatility_5',   # 변동성 크기 표준편차
-            'drawdown_20',     # 최고점 대비 낙폭 비율 (-0.1, -0.2 등)
-            'macd_hist',      # 단기 에너지
-            
-            # 4. 시장 리스크 및 타겟
-            'nasdaq_change_rate'
-        ]
-
-target_col = 'label'
+feature_cols = LSTM_FEATURE_COLS
+target_col   = 'label'
 
 # ---------------------------------------------------
-# 종목별 독립 스케일링
+# Ticker-level scaling (train-only fit, leakage-free)
 # ---------------------------------------------------
-# 전체 통짜 정규화 대신, 종목 내부에서 각각 독립적으로 스케일링을 먹입니다.
 def scale_by_ticker(dataframe, features):
-    scaled_df = dataframe.sort_values(['ticker', 'date']).reset_index(drop=True)
-    
-    # 2025-07-01 기준으로 데이터 분할 기준점을 잡음 (Data Leakage 방지)
+    scalers = {}
+    scaled_df = dataframe.sort_values(['ticker', 'date']).reset_index(drop=True).copy()
+    scaled_df[features] = scaled_df[features].replace([np.inf, -np.inf], np.nan)
+    scaled_df = scaled_df.dropna(subset=features).reset_index(drop=True)
+
     train_mask = scaled_df['date'] < '2025-07-01'
-    
-    for ticker, group in scaled_df.groupby('ticker'):
-        ticker_mask = scaled_df['ticker'] == ticker
+
+    for ticker, _ in scaled_df.groupby('ticker'):
+        ticker_mask       = scaled_df['ticker'] == ticker
         train_ticker_mask = ticker_mask & train_mask
-        
-        if train_ticker_mask.sum() > 0:
-            scaler = StandardScaler()
-            # 훈련 데이터로만 fit
-            scaler.fit(scaled_df.loc[train_ticker_mask, features])
-            # 해당 종목 전체(Train + Test)를 transform
-            scaled_df.loc[ticker_mask, features] = scaler.transform(scaled_df.loc[ticker_mask, features])
-            
+        test_ticker_mask  = ticker_mask & (~train_mask)
+
+        if train_ticker_mask.sum() == 0:
+            continue
+
+        sc = StandardScaler()
+        sc.fit(scaled_df.loc[train_ticker_mask, features])
+        scaled_df.loc[train_ticker_mask, features] = sc.transform(
+            scaled_df.loc[train_ticker_mask, features]
+        )
+        if test_ticker_mask.sum() > 0:
+            scaled_df.loc[test_ticker_mask, features] = sc.transform(
+                scaled_df.loc[test_ticker_mask, features]
+            )
+        scalers[ticker] = sc
+
+    # 추론시 재사용
+    joblib.dump(scalers, 'ticker_scalers.pkl')
     return scaled_df
 
 df_scaled = scale_by_ticker(df, feature_cols)
 
-
-
 # ---------------------------------------------------
-# 시퀀스 생성 후 날짜 기준으로 Train/Test 분할
+# Sequence generation
 # ---------------------------------------------------
-
-SEQ_LEN = 20
+SEQ_LEN_20 = 20
+SEQ_LEN_60 = 60
 
 def create_sequences_all(dataframe, feature_cols, target_col):
-    X, y, tickers, dates = [], [], [], []
-    grouped = dataframe.groupby('ticker')
-
-    for ticker, group in grouped:
+    X_20, X_60, y, tickers, dates = [], [], [], [], []
+    for ticker, group in dataframe.groupby('ticker'):
         group = group.sort_values('date')
-        if len(group) < SEQ_LEN:
+        if len(group) < SEQ_LEN_60:
             continue
-            
-        f_array = group[feature_cols].values
-        t_array = group[target_col].values
-        d_array = group['date'].values
-
-        for i in range(len(group) - SEQ_LEN):
-            X.append(f_array[i:i+SEQ_LEN])
-            y.append(t_array[i+SEQ_LEN])
+        f_arr = group[feature_cols].values
+        t_arr = group[target_col].values
+        d_arr = group['date'].values
+        for i in range(SEQ_LEN_60 - 1, len(group)):
+            X_20.append(f_arr[i - (SEQ_LEN_20 - 1): i + 1])
+            X_60.append(f_arr[i - (SEQ_LEN_60 - 1): i + 1])
+            y.append(t_arr[i])
             tickers.append(ticker)
-            dates.append(d_array[i+SEQ_LEN])
+            dates.append(d_arr[i])
+    return (
+        np.array(X_20, dtype=np.float32),
+        np.array(X_60, dtype=np.float32),
+        np.array(y,    dtype=np.float32),
+        tickers,
+        np.array(dates),
+    )
 
-    return np.array(X), np.array(y), tickers, np.array(dates)
-
-
-X_all, y_all, tickers_all, dates_all = create_sequences_all(
-    df_scaled, 
-    feature_cols, 
-    target_col
-)
-
-train_idx = dates_all < pd.to_datetime('2025-07-01')
-test_idx = dates_all >= pd.to_datetime('2025-07-01')
-
-X_train, y_train = X_all[train_idx], y_all[train_idx]
-X_test, y_test = X_all[test_idx], y_all[test_idx]
-test_tickers_split = [tickers_all[i] for i, val in enumerate(test_idx) if val]
-test_dates_split = dates_all[test_idx]
-
-# ---------------------------------------------------
-# 시계열 순서를 보장하는 Val 분할
-# ---------------------------------------------------
-# 종목 셔플 분할 오류를 막기 위해, Train 데이터 내부에서 가장 최신 날짜 기준 20%를 Val
-train_dates_only = dates_all[train_idx]
-split_time = np.percentile(train_dates_only, 80) # 하위 80% 시점 날짜 추출
-
-final_train_idx = train_dates_only <= split_time
-val_idx = train_dates_only > split_time
-
-X_train_final, y_train_final = X_train[final_train_idx], y_train[final_train_idx]
-X_val, y_val = X_train[val_idx], y_train[val_idx]
-
-print("X_train_final:", X_train_final.shape)
-print("X_val:", X_val.shape)
-print("X_test:", X_test.shape)
-
-# ---------------------------------------------------
-
-# LSTM 모델
-
-# ---------------------------------------------------
-
-model = Sequential([
-    LSTM(
-        64,
-        input_shape=(SEQ_LEN, len(feature_cols)),
-        return_sequences=False
-    ),
-    Dropout(0.3),
-    Dense(32, activation='relu'),
-    Dropout(0.2),
-    Dense(1, activation='sigmoid')
-
-])
-
-# ---------------------------------------------------
-
-# Compile
-
-# ---------------------------------------------------
-
-model.compile(
-    optimizer='adam',
-    loss='binary_crossentropy',
-    metrics=['accuracy']
+X_20_all, X_60_all, y_all, tickers_all, dates_all = create_sequences_all(
+    df_scaled, feature_cols, target_col
 )
 
 # ---------------------------------------------------
+# Train / Val / Test split (time-based, no shuffle)
+# ---------------------------------------------------
+dates_all_dt = pd.to_datetime(dates_all)
 
-# Early Stopping
+train_mask = dates_all_dt < pd.Timestamp('2025-07-01')
+test_mask  = dates_all_dt >= pd.Timestamp('2025-07-01')
+
+X_20_train, X_20_test = X_20_all[train_mask], X_20_all[test_mask]
+X_60_train, X_60_test = X_60_all[train_mask], X_60_all[test_mask]
+y_train, y_test       = y_all[train_mask],    y_all[test_mask]
+
+test_tickers = [tickers_all[i] for i, v in enumerate(test_mask) if v]
+test_dates   = dates_all[test_mask]
+
+# Val: latest 20% of train set by date (time-safe)
+train_dates_ns  = dates_all_dt[train_mask].astype(np.int64).values
+split_time_ns   = np.percentile(train_dates_ns, 80)
+
+final_train_mask = train_dates_ns <= split_time_ns
+val_mask         = train_dates_ns >  split_time_ns
+
+X_20_tr, X_20_val = X_20_train[final_train_mask], X_20_train[val_mask]
+X_60_tr, X_60_val = X_60_train[final_train_mask], X_60_train[val_mask]
+y_tr, y_val       = y_train[final_train_mask],    y_train[val_mask]
+
+print("--- 데이터셋 ---")
+print(f"Train : {len(y_tr):>7,}  |  Val : {len(y_val):>6,}  |  Test : {len(y_test):>6,}")
 
 # ---------------------------------------------------
+# DataLoader
+# ---------------------------------------------------
+BATCH_SIZE  = 128
+PIN_MEMORY  = device.type == 'cuda'
 
-early_stop = EarlyStopping(
-    monitor='val_loss',
-    patience=5,
-    restore_best_weights=True
+def make_loader(x20, x60, y, shuffle=True):
+    ds = TensorDataset(
+        torch.from_numpy(x20),
+        torch.from_numpy(x60),
+        torch.from_numpy(y),
+    )
+    return DataLoader(ds, batch_size=BATCH_SIZE, shuffle=shuffle, pin_memory=PIN_MEMORY)
+
+train_loader = make_loader(X_20_tr,   X_60_tr,   y_tr)
+val_loader   = make_loader(X_20_val,  X_60_val,  y_val,   shuffle=False)
+test_loader  = make_loader(X_20_test, X_60_test, y_test,  shuffle=False)
+
+# ---------------------------------------------------
+# Model
+# ---------------------------------------------------
+num_features = len(feature_cols)
+model = DualLSTMModel(num_features).to(device)
+print(model)
+print(f"파라미터 수: {sum(p.numel() for p in model.parameters()):,}")
+
+# ---------------------------------------------------
+# Loss: BCEWithLogitsLoss + pos_weight for class imbalance
+# ---------------------------------------------------
+classes = np.unique(y_tr)
+cw = compute_class_weight(class_weight='balanced', classes=classes, y=y_tr)
+cw_dict = dict(zip(classes.astype(int), cw))
+pos_weight = torch.tensor([cw_dict[1] / cw_dict[0]], dtype=torch.float32).to(device)
+print(f"[클래스 가중치] neg={cw_dict[0]:.4f}  pos={cw_dict[1]:.4f}  pos_weight={pos_weight.item():.4f}")
+
+criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+# weight_decay: L2 정규화 → val→test 갭(과적합) 완화
+optimizer = torch.optim.Adam(model.parameters(), lr=5e-4, weight_decay=1e-4)
+# LR 스케줄러: val_auc 3 epoch 정체 시 LR 절반 → 수렴 품질 향상
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer, mode='max', factor=0.5, patience=3, min_lr=1e-5
 )
 
 # ---------------------------------------------------
-# Class Weight
+# Training loop with early stopping on val AUC
 # ---------------------------------------------------
+EPOCHS   = 100
+PATIENCE = 15
 
-classes = np.unique(y_train_final)
+best_auc       = 0.0
+patience_count = 0
+best_weights   = None
 
-class_weights = compute_class_weight(
-    class_weight='balanced',
-    classes=classes,
-    y=y_train_final
+for epoch in range(1, EPOCHS + 1):
+    # ----- Train -----
+    model.train()
+    total_loss = 0.0
+    for x20_b, x60_b, y_b in train_loader:
+        x20_b = x20_b.to(device, non_blocking=True)
+        x60_b = x60_b.to(device, non_blocking=True)
+        y_b   = y_b.to(device,   non_blocking=True)
+
+        optimizer.zero_grad()
+        with torch.autocast(device_type=device.type, enabled=use_amp):
+            logits = model(x20_b, x60_b)
+            loss   = criterion(logits, y_b)
+        scaler_amp.scale(loss).backward()
+        scaler_amp.step(optimizer)
+        scaler_amp.update()
+        total_loss += loss.item() * len(y_b)
+
+    avg_loss = total_loss / len(y_tr)
+
+    # ----- Validate -----
+    model.eval()
+    val_probs, val_labels = [], []
+    with torch.no_grad():
+        for x20_b, x60_b, y_b in val_loader:
+            x20_b = x20_b.to(device, non_blocking=True)
+            x60_b = x60_b.to(device, non_blocking=True)
+            with torch.autocast(device_type=device.type, enabled=use_amp):
+                logits = model(x20_b, x60_b)
+            probs = torch.sigmoid(logits).cpu().numpy()
+            val_probs.extend(probs.tolist())
+            val_labels.extend(y_b.numpy().tolist())
+
+    val_auc = roc_auc_score(val_labels, val_probs)
+    current_lr = optimizer.param_groups[0]['lr']
+    print(f"Epoch {epoch:>3}/{EPOCHS}  loss={avg_loss:.4f}  val_auc={val_auc:.4f}  lr={current_lr:.2e}")
+
+    scheduler.step(val_auc)   # val_auc 기준 LR 조정
+
+    if val_auc > best_auc:
+        best_auc     = val_auc
+        best_weights = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+        patience_count = 0
+    else:
+        patience_count += 1
+        if patience_count >= PATIENCE:
+            print(f"Early stopping at epoch {epoch}  (best val_auc={best_auc:.4f})")
+            break
+
+# Restore best weights and save
+model.load_state_dict(best_weights)
+torch.save(
+    {'model_state_dict': best_weights, 'num_features': num_features},
+    'best_multi_input_lstm.pt',
 )
-
-class_weights = dict(enumerate(class_weights))
-
-print(class_weights)
+print(f"\n[저장] best_multi_input_lstm.pt  (best val_auc={best_auc:.4f})")
 
 # ---------------------------------------------------
-
-# 학습
-
+# Test evaluation
 # ---------------------------------------------------
+model.eval()
+pred_prob = []
+with torch.no_grad():
+    for x20_b, x60_b, _ in test_loader:
+        x20_b = x20_b.to(device, non_blocking=True)
+        x60_b = x60_b.to(device, non_blocking=True)
+        with torch.autocast(device_type=device.type, enabled=use_amp):
+            logits = model(x20_b, x60_b)
+        pred_prob.extend(torch.sigmoid(logits).cpu().numpy().tolist())
 
-history = model.fit(
-    X_train_final,
-    y_train_final,
+pred_prob = np.array(pred_prob)
+threshold = 0.53
+pred      = (pred_prob >= threshold).astype(int)
 
-    validation_data=(X_val, y_val),
-
-    epochs=30,
-
-    batch_size=64,
-
-    callbacks=[early_stop],
-
-    verbose=1,
-
-    class_weight=class_weights
-
-)
-
-# ---------------------------------------------------
-
-# 예측
-
-# ---------------------------------------------------
-
-pred_prob = model.predict(X_test).flatten()
-
-threshold = 0.6
-
-pred = (pred_prob >= threshold).astype(int)
-
-# ---------------------------------------------------
-
-# 평가
-
-# ---------------------------------------------------
-
-# 평가 리포트 출력
 print("\n===== Classification Report =====")
-print(classification_report(y_test, pred))
-print(f"Accuracy : {accuracy_score(y_test, pred):.4f}")
+print(classification_report(y_test.astype(int), pred))
+print(f"Accuracy : {accuracy_score(y_test.astype(int), pred):.4f}")
 print(f"ROC-AUC  : {roc_auc_score(y_test, pred_prob):.4f}")
 
 # ---------------------------------------------------
-# 예측 결과 저장
+# Prediction result CSV
 # ---------------------------------------------------
-
 result_df = pd.DataFrame({
-    'ticker': test_tickers_split,
-    'date': test_dates_split,
-    'actual': y_test,
-    'pred': pred,
-    'pred_prob': pred_prob
-}).sort_values(by='pred_prob', ascending=False)
-
-result_df.to_csv(
-"lstm_prediction_result.csv",
-index=False
-)
-
+    'ticker':    test_tickers,
+    'date':      test_dates,
+    'actual':    y_test.astype(int),
+    'pred':      pred,
+    'pred_prob': pred_prob,
+})
+result_df = result_df.sort_values(['date', 'pred_prob'], ascending=[True, False])
+result_df.to_csv("lstm_prediction_result.csv", index=False)
 print("\nlstm_prediction_result.csv 저장 완료")
-print(len(X_all), len(y_all), len(tickers_all), len(dates_all))
 
 # ---------------------------------------------------
-# Top-K 평가
+# Daily Top-K evaluation
 # ---------------------------------------------------
+print("\n===== Daily Top-K Performance =====")
+CONFIDENCE_THRESHOLD = 0.65
+daily_top3_actuals   = []
+daily_top5_actuals   = []
 
-top_50 = result_df.drop_duplicates(subset=['ticker']).head(50)
-top_100 = result_df.head(100)
-top_200 = result_df.head(200)
+print(f"테스트 시작: {result_df['date'].min()}")
+print(f"테스트 마감: {result_df['date'].max()}")
+print(f"총 테스트 영업일: {result_df['date'].nunique()}일")
 
-print("\n===== Top-K Performance =====")
+for date, group in result_df.groupby('date'):
+    group_sorted = group.sort_values('pred_prob', ascending=False)
+    valid_top3 = group_sorted.head(3)
+    valid_top5 = group_sorted.head(5)
+    valid_top3 = valid_top3[valid_top3['pred_prob'] >= CONFIDENCE_THRESHOLD]
+    valid_top5 = valid_top5[valid_top5['pred_prob'] >= CONFIDENCE_THRESHOLD]
+    if not valid_top3.empty:
+        daily_top3_actuals.extend(valid_top3['actual'].tolist())
+    if not valid_top5.empty:
+        daily_top5_actuals.extend(valid_top5['actual'].tolist())
 
-print(f"Top 50 상승 비율  : {top_50['actual'].mean():.4f}")
-print(top_50)
-print(f"Top 100 상승 비율 : {top_100['actual'].mean():.4f}")
-print(f"Top 200 상승 비율 : {top_200['actual'].mean():.4f}")
+real_top3 = np.mean(daily_top3_actuals) if daily_top3_actuals else 0.0
+real_top5 = np.mean(daily_top5_actuals) if daily_top5_actuals else 0.0
 
-print(f"\n전체 상승 비율 : {result_df['actual'].mean():.4f}")
+print(f"가드레일: 예측 확률 {CONFIDENCE_THRESHOLD} 이상만 진입")
+print(f"Top3 타율: {real_top3:.4f}  ({len(daily_top3_actuals)}회 진입)")
+print(f"Top5 타율: {real_top5:.4f}  ({len(daily_top5_actuals)}회 진입)")
+print(f"베이스라인 (시장 평균): {result_df['actual'].mean():.4f}")

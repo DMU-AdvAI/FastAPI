@@ -1,234 +1,169 @@
-# TODO:
-# 1. 데이터 정제 (Data Cleaning)
-#    - yfinance에서 가져온 데이터 중 비어있는 값(NaN) 처리
-#    - 주식 분할이나 배당 등이 반영된 수정 종가(Adj Close) 사용 여부 결정
-#
-# 2. 기술적 지표 생성 (Technical Indicators)
-#    - 이동평균선(SMA/EMA): 5일, 20일, 60일선 등 계산
-#    - 변동성 지표: 볼린저 밴드(Bollinger Bands), ATR 등
-#    - 모멘텀 지표: RSI, MACD, Stochastic 등
-#
-# 3. 모델 입력용 데이터셋 구성 (Feature Matrix)
-#    - XGBoost 모델이 학습할 때 사용했던 컬럼 순서와 동일하게 정렬
-#    - 예측 시점(t)을 기준으로 과거 n일간의 데이터를 한 줄로 펼치기(Lag features)
-#
-# 4. 정규화 및 스케일링 (Optional)
-#    - 데이터의 범위를 0~1 사이로 맞추는 등의 스케일링 작업 (필요 시)
-#
-# 5. 최종 데이터 유효성 검사
-#    - 모델에 넣기 직전 데이터에 이상치나 무한대(Inf) 값이 없는지 확인
-
 import pandas as pd
 import numpy as np
-from app.database.sqlite_db import get_connection
 from datetime import datetime
+from app.config.config import LSTM_FEATURE_COLS
+from app.features.base_processor import BaseFeatureProcessor
 
-class FeatureProcessor:
-    def __init__(self, db_path: str = "stock_data.db"):
-        self.db_path = db_path
 
-    def get_raw_data(self)->pd.DataFrame:
-        conn = get_connection()
-        query = f"SELECT * FROM stock_prices ORDER BY date ASC"
-        df = pd.read_sql(query,conn)
-        conn.close()
+class FeatureProcessorLSTM(BaseFeatureProcessor):
+    pass
 
-        return df
-        
-    def calc_technical_indicators(self, df, rsi_period=14):
-        df = df.sort_values(['ticker','date']).reset_index(drop=True)
+    def calc_technical_indicators(self, df, rsi_period=14, is_inference=False):
+        # 종목과 날짜 순으로 철저하게 정렬
+        df = df.sort_values(['ticker', 'date']).reset_index(drop=True)
 
         # ---------------------------
-        # 이동평균 (Trend)
+        # 1. 이동평균 (Trend)
         # ---------------------------
-        df['ma5'] = (
-        df.groupby('ticker')['adj_close']
-        .transform(lambda x: x.rolling(5).mean())
+        df['ma10'] = df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(10).mean())
+        df['ma20'] = df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(20).mean())
+
+        df['close_ratio_10'] = df['adj_close'] / (df['ma10'] + 1e-9)
+        df['close_ratio_20'] = df['adj_close'] / (df['ma20'] + 1e-9)
+
+        # 변동성 활동성 지표
+        df['tr'] = np.maximum(
+            df['high'] - df['low'],
+            np.maximum(
+                (df['high'] - df.groupby('ticker')['adj_close'].shift(1)).abs(),
+                (df['low'] - df.groupby('ticker')['adj_close'].shift(1)).abs()
+            )
         )
 
-        df['ma20'] = (
-            df.groupby('ticker')['adj_close']
-            .transform(lambda x: x.rolling(20).mean())
-        )
-
-        df['ma_ratio'] = df['ma5'] / df['ma20']
-        df['price_ma20'] = df['adj_close'] / df['ma20']
-
-        df['disparity_20'] = (df['adj_close'] / df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(20).mean())) * 100
-        df['disparity_20'] = df['disparity_20'].fillna(100)
-
-        # MACD (이동평균 수렴 확산 지수) : 단기 이평선과 장기 이평선이 얼마나 빨리 멀어지는지(에너지)를 측정
-        short_ema = df.groupby('ticker')['adj_close'].transform(lambda x: x.ewm(span=12, adjust=False).mean())
-        long_ema = df.groupby('ticker')['adj_close'].transform(lambda x: x.ewm(span=26, adjust=False).mean())
-        df['macd'] = short_ema - long_ema
-        df['macd_signal'] = df.groupby('ticker')['macd'].transform(lambda x: x.ewm(span=9, adjust=False).mean())
-        df['macd_hist'] = df['macd'] - df['macd_signal'] # 이 히스토그램이 중요!
-
-        # 5일간의 고가 - 저가 평균 (종목의 활동성)
-        df['price_range'] = (df['high'] - df['low']) / df['adj_close']
-        df['tr_5'] = df.groupby('ticker')['price_range'].transform(lambda x: x.rolling(5).mean())
-
+        df['atr_5'] = df.groupby('ticker')['tr'].transform(lambda x: x.rolling(5).mean())
+        df['atr_change'] = df.groupby('ticker')['atr_5'].pct_change(fill_method=None)
+        df['atr_change'] = df['atr_change'].replace([np.inf, -np.inf], np.nan)
 
         # ---------------------------
-        # RSI (Momentum)
-        # ---------------------------
-        delta = df.groupby('ticker')['adj_close'].diff()
-        # 상승, 하락분 분리
-        gain = delta.clip(lower=0)
-        loss = -delta.clip(upper=0)
-
-        avg_gain = (
-            gain.groupby(df['ticker'])
-            .transform(lambda x : x.rolling(rsi_period).mean())
-        )
-        
-        avg_loss = (
-            loss.groupby(df['ticker'])
-            .transform(lambda x : x.rolling(rsi_period).mean())
-        )
-
-        # RS(상대강도) 및 RSI 계산
-        rs = avg_gain / (avg_loss + 1e-9)
-        df['rsi'] = 100 - (100 / (1 + rs))
-
-        #이격도
-        # df['disparity_20'] = (df['adj_close'] - df['ma20']) / df['ma20']
-
-        # 볼린저 밴드 %B
-        std = df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(20).std())
-        ma20 = df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(20).mean())
-        df['upper_band'] = ma20 + (std * 2)
-        df['lower_band'] = ma20 - (std * 2)
-        # 현재가가 밴드 내 어디 위치하는지 (0~1 사이 값)
-        df['bb_percent'] = (df['adj_close'] - df['lower_band']) / (df['upper_band'] - df['lower_band'])
-
-        # ---------------------------
-        # 3. 수익률 (Return)
+        # 2. 수익률 및 변동성 (Return & Vol)
         # ---------------------------
         if 'change_rate' in df.columns:
             df['return_1'] = df['change_rate']
-            #5일 누적 수익률
-            df['return_5'] = (
-                df.groupby('ticker')['change_rate']
-                .transform(lambda x: (1 + x).rolling(5).apply(np.prod, raw=True) - 1)
+            df['return_3'] = df.groupby('ticker')['change_rate'].transform(
+                lambda x: (1 + x).rolling(3).apply(np.prod, raw=True) - 1
+            )
+            df['return_5'] = df.groupby('ticker')['change_rate'].transform(
+                lambda x: (1 + x).rolling(5).apply(np.prod, raw=True) - 1
+            )
+            # 20일선 중기 수익률 추가
+            df['return_20'] = df.groupby('ticker')['change_rate'].transform(
+                lambda x: (1 + x).rolling(20).apply(np.prod, raw=True) - 1
             )
 
-            df['volatility_5'] = (
-                df.groupby('ticker')['return_1']
-                .transform(lambda x: x.rolling(5).std())
+            df['volatility_5'] = df.groupby('ticker')['return_1'].transform(
+                lambda x: x.rolling(5).std()
             )
+            # 단/중기 변동성 상태 (20일선)
+            df['volatility_regime_20'] = (
+                df['volatility_5'] / (
+                    df.groupby('ticker')['volatility_5'].transform(lambda x: x.rolling(20).mean()) + 1e-9)
+            )
+            # 장기 변동성 상태 (60일선 대비 현재 변동성 압축률)
+            df['volatility_regime_60'] = (
+                df['volatility_5'] / (
+                    df.groupby('ticker')['volatility_5'].transform(lambda x: x.rolling(60).mean()) + 1e-9)
+            )
+
+            df['volatility_compression'] = df['volatility_5'] / (df.groupby('ticker')['volatility_5'].transform(lambda x: x.rolling(20).mean()) + 1e-9)
+            
+            df['volatility_change'] = np.log((df['volatility_5'] + 1e-9) / (df.groupby('ticker')['volatility_5'].shift(3) + 1e-9))
+
 
         # ---------------------------
-        # 거래량
+        # 3. 거래량 (Volume)
         # ---------------------------
         if 'volume' in df.columns:
-            df['volume_ma5'] = (
-                df.groupby('ticker')['volume']
-                .transform(lambda x: x.rolling(5).mean())
-            )
+            df['volume_ma5'] = df.groupby('ticker')['volume'].transform(lambda x: x.rolling(5).mean())
             df['volume_ratio'] = df['volume'] / (df['volume_ma5'] + 1e-9)
+            df['volume_change'] = df.groupby('ticker')['volume'].pct_change(fill_method=None)
+            # 기존 10일선 수급 지표
+            df['volume_z'] = (
+                df['volume'] - df.groupby('ticker')['volume'].transform(lambda x: x.rolling(10).mean())
+            ) / (df.groupby('ticker')['volume'].transform(lambda x: x.rolling(10).std()) + 1e-9)
 
+            df['volume_shock'] = df.groupby('ticker')['volume_z'].transform(lambda x: x.rolling(3).max())
+            
+            # 20일선 수급 지표
+            df['volume_zscore_20'] = (df['volume'] - df.groupby('ticker')['volume'].transform(lambda x: x.rolling(20).mean())) / (df.groupby('ticker')['volume'].transform(lambda x: x.rolling(20).std()) + 1e-9)            
+            # 60일 장기 수급 지표
+            df['volume_zscore_60'] = (df['volume'] - df.groupby('ticker')['volume'].transform(lambda x: x.rolling(60).mean())) / (df.groupby('ticker')['volume'].transform(lambda x: x.rolling(60).std()) + 1e-9)
         # ---------------------------
-        # 시장 대비 (Alpha)
+        # 4. 로그수익률 및 모멘텀
         # ---------------------------
-        if 'alpha' in df.columns:
-            df['alpha_5'] = (
-                df.groupby('ticker')['alpha']
-                .transform(lambda x: x.rolling(5).mean())
-            )
-            df['alpha_20'] = (
-                df.groupby('ticker')['alpha']
-                .transform(lambda x: x.rolling(20).mean())
-            )
-            df['alpha_divergence'] = df['alpha'] - df['alpha_5']
-            df['alpha_5'] = df['alpha_5'].fillna(0)
-            df['alpha_20'] = df['alpha_20'].fillna(0)
-            df['alpha_divergence'] = df['alpha_divergence'].fillna(0)
+        df['log_return'] = np.log(df['adj_close']) - np.log(df.groupby('ticker')['adj_close'].shift(1))
 
-        #심리도
-        df['is_up'] = (df['change_rate'] > 0).astype(int)
-        df['psychological'] = df.groupby('ticker')['is_up'].transform(lambda x: x.rolling(10).mean()) * 100
+        #로그리턴 차분값 평균
+        df['momentum_3'] = df.groupby('ticker')['log_return'].transform(lambda x: x.rolling(3).sum())
+        df['momentum_5'] = df.groupby('ticker')['log_return'].transform(lambda x: x.rolling(5).sum())
+        df['momentum_20'] = df.groupby('ticker')['log_return'].transform(lambda x: x.rolling(20).sum())
+        df['momentum_60'] = df.groupby('ticker')['log_return'].transform(lambda x: x.rolling(60).sum())
 
-        # 미래 수익률
-        df['target_1'] = (
-            df.groupby('ticker')['adj_close']
-            .shift(-1) / df['adj_close'] - 1
-        )
-
-        df['target_5'] = (
-            df.groupby('ticker')['adj_close']
-            .shift(-5) / df['adj_close'] - 1
-        )
-        # 분류 (노이즈 제거)
-        # df['label'] = (df['target_5'] > 0.02).astype(int)
-        # print(df['label'].value_counts(normalize=True))
-
-        # 내일부터 3일 이내에 '종가 기준'으로 한 번이라도 2.5% 이상 상승하면 1, 아니면 0
-        df['future_max_close_3d'] = df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(3, min_periods=1).max().shift(-3))
-        df['label'] = np.where((df['future_max_close_3d'] - df['adj_close']) / df['adj_close'] >= 0.02, 1, 0)
-
-        # 최고가 대비 하락률 (High Drawdown)
-        df['max_20'] = df.groupby('ticker')['high'].transform(lambda x: x.rolling(20).max())
-        df['drawdown_20'] = (df['adj_close'] - df['max_20']) / df['max_20']
-
-        # 로그수익률
-        df['log_return'] = (
-            np.log(df['adj_close'])
-            - np.log(df.groupby('ticker')['adj_close'].shift(1))
-        )
-
-        # 캔들 길이
-        df['candle_body'] = (
-            (df['adj_close'] - df['open']) / df['open']
-        )
-
-        # 위아래 꼬리 포함 변동폭
-        df['high_low_spread'] = (
-            (df['high'] - df['low']) / df['adj_close']
-        )
-
-        # 거래량 변화율
-        df['volume_change'] = (
-            df.groupby('ticker')['volume']
-            .pct_change()
-        )
+        # 가속도
+        df['momentum_accel_3'] = df.groupby('ticker')['momentum_3'].transform(lambda x: x.diff().rolling(3).mean())
+        df['momentum_accel_5'] = df.groupby('ticker')['momentum_5'].transform(lambda x: x.diff().rolling(5).mean())
+        df['momentum_accel_20'] = df.groupby('ticker')['momentum_20'].transform(lambda x: x.diff().rolling(20).mean())
         
-        check_cols = ['rsi', 'macd_hist', 'bb_percent', 'volatility_5', 'log_return', 'volume_change', 'label']
-        df = df.dropna(subset=check_cols).reset_index(drop=True)
+        
+        # 캔들 구조 변수
+        df['candle_body'] = (df['adj_close'] - df['open']) / (df['open'] + 1e-9)
+        df['high_low_spread'] = (df['high'] - df['low']) / (df['adj_close'] + 1e-9)
 
-        window_size = 5 
-        df = df.groupby('ticker').filter(lambda x: len(x) >= window_size).reset_index(drop=True)
+        df['high_10'] = df.groupby('ticker')['adj_close'].transform(lambda x: x.rolling(10).max())
+        df['breakout_pressure'] = df['adj_close'] / (df['high_10'] + 1e-9)
 
+        # ---------------------------
+        # 시장 상대 강도
+        # ---------------------------
+        df['relative_strength'] = df['change_rate'] - df['nasdaq_change_rate']
+
+        # 고점 돌파 거리(돌파 직전 패턴 잡기)
+        df['high_breakout_20'] =df.groupby('ticker')['high'].transform(lambda x: x.rolling(20).max())
+        df['high_breakout_20'] = df['adj_close'] / (df['high_breakout_20'] + 1e-9)
+
+        df['high_breakout_60'] = df.groupby('ticker')['high'].transform(lambda x: x.rolling(60).max())
+        df['high_breakout_60'] = df['adj_close'] / (df['high_breakout_60'] + 1e-9)
+
+        # ---------------------------
+        # vix/tnx 파생 피처
+        # ---------------------------
+        # VIX가 개별 종목의 변동성에 비해 얼마나 과도한지 적은지
+        df['vix_vs_stock_vol'] = df['vix'] / (df['volatility_5'] * 100 + 1e-9)
+
+        
+
+        # ---------------------------------------------------
+        # 미래 3영업일 종가 기준 라벨링
+        # ---------------------------------------------------
+
+        if not is_inference:
+            # 장중 저가 기준 SL + 종가 기준 TP (base_processor.make_label 사용)
+            df = self._apply_labels(df)
+        
+        # ---------------------------------------------------
+        # 6. 컬럼 필터링 및 데이터 동적 정리
+        # ---------------------------------------------------
         meta_cols = ['ticker', 'date']
-        feature_cols = [
-            # 1. 가격의 변화율 및 캔들 모양 (이미 0을 기준으로 정규화된 형태)
-            'change_rate',
-            'log_return',
-            'candle_body',
-            'high_low_spread',
-            
-            # 2. 거래량 지표 (Raw volume은 절대 금지, 비율로 치환된 것만 사용)
-            'volume_ratio',
-            'volume_change',
-            
-            # 3. 보조지표 (0~1 사이 혹은 스케일이 안정적인 녀석들)
-            'bb_percent',     # 0~1 사이 값이라 LSTM이 환장하고 좋아함
-            'volatility_5',   # 변동성 크기 표준편차
-            'drawdown_20',     # 최고점 대비 낙폭 비율 (-0.1, -0.2 등)
-            'macd_hist',      # 단기 에너지
-            
-            # 4. 시장 리스크 및 타겟
-            'nasdaq_change_rate',
-            'label'
-        ]
+        feature_cols = LSTM_FEATURE_COLS.copy()
+
+        # 학습 모드일 때만 'label'을 피처 명단에 결합
+        if not is_inference:
+            feature_cols.append('label')
+
+        # 필요한 컬럼만 슬라이싱 (존재하지 않는 컬럼 참조 원천 차단)
         df = df[meta_cols + feature_cols]
 
-        print(df.columns)
+        # 결측치 제거 (label을 제외한 순수 인풋 지표 기준)
+        feature_only = [c for c in feature_cols if c != 'label']
+        df = df.dropna(subset=feature_only)
+
+        # 시퀀스 길이(최대 60일) 채울 수 있는 데이터만 남기기 (실전 추론 시 안전하게 60일 확보)
+        window_size = 60 if is_inference else 20
+        df = df.groupby('ticker').filter(lambda x: len(x) >= window_size).reset_index(drop=True)
 
         return df
-    
+
 if __name__ == "__main__":
-    processor = FeatureProcessor()
+    processor = FeatureProcessorLSTM()
     df = processor.get_raw_data()
     df = processor.calc_technical_indicators(df)
 
