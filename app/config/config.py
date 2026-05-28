@@ -25,7 +25,7 @@ LSTM_FEATURE_COLS = [
     'high_low_spread',
 
     # ===== 시장 동조 =====
-    'relative_strength',
+    # 'relative_strength',
     # 'high_breakout_20',
     'high_breakout_60',
     # ===== 시장 지수 =====
@@ -43,7 +43,7 @@ GBM_FEATURE_COLS = [
     # 이격도
     'disparity_20',
     # 시장 상대 강도
-    'alpha',
+    # 'alpha',
     'alpha_5',
     # 'alpha_20',
     # 'alpha_divergence',
@@ -71,6 +71,8 @@ GBM_FEATURE_COLS = [
     'price_position_52w',
     # 'disparity_zscore'
     # 시장 센티멘트
+    # 'obv_slope_5',   # ← 추가
+    # 'mfi',  
 ]
 
 TICKERS = [

@@ -1,6 +1,7 @@
 import pandas as pd
 import os
 import numpy as np
+import shap
 import joblib
 from app.config.config import GBM_FEATURE_COLS
 import lightgbm as lgb
@@ -168,6 +169,7 @@ print(f"ROC-AUC  : {roc_auc_score(y_test, pred_prob):.4f}")
 # -----------------------------
 # Feature Importance
 # -----------------------------
+
 importance_df = pd.DataFrame({
     'feature': feature_cols,
     'importance': model.feature_importances_
@@ -176,6 +178,29 @@ importance_df = pd.DataFrame({
 print("\n===== Feature Importance =====")
 print(importance_df)
 
+
+# -----------------------------
+# SHAP Feature Importance
+# -----------------------------
+explainer = shap.TreeExplainer(model)
+shap_values = explainer.shap_values(X_test)
+
+# LightGBM binary: shap_values가 list면 [1] (양성 클래스)
+sv = shap_values[1] if isinstance(shap_values, list) else shap_values
+
+shap_df = pd.DataFrame({
+    'feature':    feature_cols,
+    'mean_shap':  np.abs(sv).mean(axis=0)
+}).sort_values('mean_shap', ascending=False)
+
+print("\n===== SHAP Feature Importance =====")
+print(shap_df.to_string(index=False))
+
+weak = shap_df[shap_df['mean_shap'] < 0.001]['feature'].tolist()
+if weak:
+    print(f"\n[제거 후보] mean|SHAP| < 0.001: {weak}")
+else:
+    print("\n[제거 후보 없음] 모든 피처 기여 중")
 # -----------------------------
 # 예측 결과 저장
 # -----------------------------
