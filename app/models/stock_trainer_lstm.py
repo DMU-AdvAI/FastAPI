@@ -10,7 +10,7 @@ random.seed(42)
 np.random.seed(42)
 torch.manual_seed(42)
 
-from app.config.config import LSTM_FEATURE_COLS
+from app.config.config import LSTM_FEATURE_COLS,LSTM_TEST_FEATURE_COLS
 from app.models.lstm_model import DualLSTMModel
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (

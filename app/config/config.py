@@ -1,4 +1,5 @@
 LSTM_FEATURE_COLS = [
+    
     # 'return_3',
     'return_20',
 
@@ -10,7 +11,7 @@ LSTM_FEATURE_COLS = [
     'momentum_accel_20',
 
     # ===== 변동성 흐름 =====
-    'atr_change',          
+    # 'atr_change',          
     'volatility_regime_20', 
     'volatility_regime_60', 
 
@@ -29,10 +30,25 @@ LSTM_FEATURE_COLS = [
     # 'high_breakout_20',
     'high_breakout_60',
     # ===== 시장 지수 =====
-    'vix_vs_stock_vol',
+    # 'vix_vs_stock_vol',
     # 시장 센티멘트 흐름
     'nasdaq_change_rate'
 ]
+LSTM_TEST_FEATURE_COLS = [
+    # GBM 핵심 피처의 시계열 (중복 없이)
+    'rsi',           # RSI 흐름
+    'macd_hist',     # MACD 흐름  
+    'volume_ratio',  # 거래량 흐름
+    'drawdown_20',   # 낙폭 흐름
+    'bb_percent',    # 밴드 위치 흐름
+    'return_5',      # 단기 수익률 흐름
+    'nasdaq_change_rate',  # 시장 흐름
+    # LSTM 고유 피처
+    'candle_body',   # 캔들 방향성
+    'high_low_spread',
+    'price_position_52w',  # 52주 위치 흐름
+]
+
 
 GBM_FEATURE_COLS = [
     # 모멘텀
