@@ -12,7 +12,7 @@ from app.features.processor_lstm import FeatureProcessorLSTM
 # ---------------------------------------------------
 # 가드레일 & 타임프레임 스펙
 # ---------------------------------------------------
-LGBM_THRESHOLD = 0.58 
+LGBM_THRESHOLD = 0.54 
 LSTM_THRESHOLD = 0.60
 SEQ_LEN_20 = 20
 SEQ_LEN_60 = 60

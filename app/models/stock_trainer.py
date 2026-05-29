@@ -144,7 +144,7 @@ joblib.dump(model, 'best_lgbm_model.pkl')
 # -----------------------------
 # 보정
 # -----------------------------
-calibrated = CalibratedClassifierCV(model, method='isotonic', cv='prefit')
+calibrated = CalibratedClassifierCV(model, method='sigmoid', cv='prefit')
 calibrated.fit(X_val, y_val)
 joblib.dump(calibrated, 'best_lgbm_model.pkl')  # 같은 파일명으로 덮어쓰기
 
