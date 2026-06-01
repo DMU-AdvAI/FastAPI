@@ -320,5 +320,20 @@ async def watchlist_clear(discord_id: str):
     return watchlist_service.clear_watchlist(discord_id)
 
 
+# ══════════════════════════════════════
+# 주먹봇 — 오늘의 매수 시그널
+# ══════════════════════════════════════
+@router.get("/signals")
+async def signals():
+    """오늘의 매수 시그널 (LightGBM + LSTM AND 게이트 앙상블).
+
+    - 데이터 수집 + 추론까지 30~60초 소요 (첫 호출 시 모델 로딩 추가)
+    - 응답: signals (최대 3개), vix_halted, no_signal
+    """
+    import asyncio
+    from app.pipeline.inference_service import run_inference
+    return await asyncio.to_thread(run_inference)
+
+
 def _parse_date(s: str) -> datetime:
     return datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc)

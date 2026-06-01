@@ -33,7 +33,9 @@ def init_db():
         change_rate REAL,       -- 등락률
         nasdaq_close REAL,          -- 나스닥 종가
         nasdaq_change_rate REAL,    -- 나스닥 등락률
-        alpha REAL,           -- 시장 대비 초과수익률 (Rm - Rs)
+        alpha REAL,             -- 시장 대비 초과수익률 (Rm - Rs)
+        vix REAL,               -- VIX 공포지수
+        tnx REAL,               -- 미국 10년물 국채금리
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(ticker, date) -- 동일 종목, 동일 날짜 데이터 중복 방지
     );
@@ -73,6 +75,18 @@ def init_db():
             conn.execute(query_price)
             conn.execute(query_member)
             conn.execute(query_member_stock)
+
+            # 기존 stock_prices 마이그레이션 — vix / tnx 없으면 ALTER
+            price_cols = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(stock_prices)").fetchall()
+            }
+            if "vix" not in price_cols:
+                conn.execute("ALTER TABLE stock_prices ADD COLUMN vix REAL")
+                print("  → stock_prices.vix 컬럼 추가")
+            if "tnx" not in price_cols:
+                conn.execute("ALTER TABLE stock_prices ADD COLUMN tnx REAL")
+                print("  → stock_prices.tnx 컬럼 추가")
 
             # 기존 DB 마이그레이션 — quantity / avg_buy_price / updated_at 없으면 ALTER
             existing_cols = {
